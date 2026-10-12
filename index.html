@@ -183,7 +183,7 @@ label.einst{display:block;color:var(--grau);font-size:13px;margin:12px 0 6px}
       <button class="knopfklein" id="eSpeichern">Speichern</button>
       <button class="knopfklein" id="eTon">Ton für Buch-Alarm testen</button>
       <button class="knopfklein" id="eLoeschen" style="color:var(--rot)">Gespeicherten Verlauf löschen</button>
-      <p class="leer" style="margin-top:14px">Die App holt alle 10 Sekunden neue Daten. ntfy speichert nur 12 Stunden – alles Ältere merkt sich die App auf diesem Handy (bis zu 7 Tage).<br><br>Benachrichtigungen bei geschlossener App kommen weiterhin über <b>Bark</b>.</p>
+      <p class="leer" style="margin-top:14px">Die App holt alle 30 Sekunden neue Daten, der Bot schickt sein Log alle 10 Minuten. ntfy speichert nur 12 Stunden – alles Ältere merkt sich die App auf diesem Handy (bis zu 7 Tage).<br><br>Benachrichtigungen bei geschlossener App kommen weiterhin über <b>Bark</b>.</p>
     </div>
   </section>
 </main>
@@ -214,29 +214,32 @@ let daten = lade('mcbot-daten', { haupt: [], log: [], chat: [] });
 let gesehen = lade('mcbot-gesehen', { name: 0, chat: 0, buch: 0 });
 let ersterAbruf = true;
 
-async function hole(thema, seit) {
-  const r = await fetch(`${NTFY}${encodeURIComponent(thema)}/json?poll=1&since=${seit}`);
-  if (!r.ok) throw new Error(r.status);
-  const t = await r.text();
-  return t.split('\n').filter(Boolean).map(z => { try { return JSON.parse(z); } catch { return null; } })
-    .filter(m => m && m.event === 'message')
-    .map(m => ({ id: m.id, time: m.time, title: m.title || '', message: m.message || '' }));
-}
-
+// Alle drei Themen in EINER Anfrage holen (schont das ntfy-Limit)
+let pauseBis = 0;
 async function aktualisieren() {
   if (!einst.thema) { setStatus('Thema fehlt', 'var(--gelb)'); return; }
+  if (Date.now() < pauseBis) return;
   const t = themen();
+  const nachThema = { [t.haupt]: 'haupt', [t.log]: 'log', [t.chat]: 'chat' };
+  const alle = [...daten.haupt, ...daten.log, ...daten.chat];
+  const seit = alle.length ? Math.max(...alle.map(m => m.time)) : '12h';
   try {
+    const r = await fetch(`${NTFY}${[t.haupt, t.log, t.chat].map(encodeURIComponent).join(',')}/json?poll=1&since=${seit}`);
+    if (r.status === 429) { pauseBis = Date.now() + 120000; setStatus('ntfy-Limit – kurz warten', 'var(--gelb)'); return; }
+    if (!r.ok) throw new Error(r.status);
+    const text = await r.text();
     const neueBuecher = [];
-    for (const k of ['haupt', 'log', 'chat']) {
-      const liste = daten[k];
-      const seit = liste.length ? liste[liste.length - 1].id : '12h';
-      const neu = await hole(t[k], seit);
-      const ids = new Set(liste.map(m => m.id));
-      for (const m of neu) if (!ids.has(m.id)) { liste.push(m); if (k === 'haupt' && /Buch/i.test(m.message)) neueBuecher.push(m); }
-      const grenze = Date.now() / 1000 - MAX_ALTER;
-      daten[k] = liste.filter(m => m.time >= grenze).slice(-4000);
+    const ids = new Set(alle.map(m => m.id));
+    for (const z of text.split('\n')) {
+      if (!z) continue;
+      let m; try { m = JSON.parse(z); } catch { continue; }
+      if (m.event !== 'message' || ids.has(m.id)) continue;
+      const k = nachThema[m.topic]; if (!k) continue;
+      daten[k].push({ id: m.id, time: m.time, title: m.title || '', message: m.message || '' });
+      if (k === 'haupt' && /Buch/i.test(m.message || '')) neueBuecher.push(m);
     }
+    const grenze = Date.now() / 1000 - MAX_ALTER;
+    for (const k of ['haupt', 'log', 'chat']) daten[k] = daten[k].sort((a, b) => a.time - b.time).filter(m => m.time >= grenze).slice(-4000);
     speichere('mcbot-daten', daten);
     if (!ersterAbruf && neueBuecher.length) buchAlarm();
     ersterAbruf = false;
@@ -299,7 +302,7 @@ function zeichneAlles() {
   const seit = jetzt - letzte;
   const letztesWort = zeilen.length ? zeilen[zeilen.length - 1].text : '';
   if (!letzte) setStatus('Keine Daten', 'var(--grau)');
-  else if (seit < 90) {
+  else if (seit < 720) {
     if (/Pause Nr\./.test(zeilen.slice(-5).map(z => z.text).join(' '))) setStatus('In Pause', 'var(--gelb)');
     else setStatus('Online', 'var(--gruen)');
   } else if (seit < 3600) setStatus(`Ruhig · ${Math.round(seit / 60)} Min`, 'var(--gelb)');
@@ -441,7 +444,7 @@ document.querySelectorAll('[data-cmd]').forEach(btn => btn.onclick = async () =>
     await fetch(NTFY + encodeURIComponent(einst.thema + '-cmd'), { method: 'POST', body: cmd });
     $('cmdHinweis').textContent = `„${cmd}“ gesendet – der Bot reagiert in ca. 5 Sekunden.`;
     setTimeout(() => $('cmdHinweis').textContent = '', 6000);
-    setTimeout(aktualisieren, cmd === 'status' ? 7000 : 35000);
+    setTimeout(aktualisieren, cmd === 'status' ? 8000 : 30000);
   } catch { $('cmdHinweis').textContent = 'Senden fehlgeschlagen – Internet?'; }
 });
 
@@ -526,7 +529,7 @@ $('eLoeschen').onclick = () => { if (confirm('Gespeicherten Verlauf auf diesem H
 // ===================== Start =====================
 zeigeSeite(einst.thema ? lade('mcbot-seite', 'home') : 'einst');
 aktualisieren();
-setInterval(aktualisieren, 10000);
+setInterval(() => { if (!document.hidden) aktualisieren(); }, 30000);
 setInterval(zeichneAlles, 15000);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) aktualisieren(); });
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});

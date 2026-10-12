@@ -58,6 +58,10 @@ nav .badge{position:absolute;top:4px;left:55%;background:var(--rot);color:#fff;b
 .seg{display:flex;background:var(--karte2);border-radius:10px;padding:3px;gap:3px}
 .seg button{flex:1;background:none;border:0;color:var(--grau);padding:6px;border-radius:8px;font-family:inherit;font-size:13px}
 .seg button.an{background:var(--rand);color:var(--text)}
+.schreiben{display:flex;gap:8px}
+.schreiben input{flex:1;background:var(--karte2);border:1px solid var(--rand);border-radius:10px;color:var(--text);padding:12px;font-size:16px;font-family:inherit;min-width:0}
+.schreiben button{background:var(--gruen);color:#fff;border:0;border-radius:10px;padding:0 16px;font-weight:800;font-size:15px;font-family:inherit}
+.zeile.ich{color:var(--gruen)}
 .buch{display:flex;gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid #20262d}
 .buch .ic{font-size:22px}
 label.einst{display:block;color:var(--grau);font-size:13px;margin:12px 0 6px}
@@ -133,9 +137,23 @@ label.einst{display:block;color:var(--grau);font-size:13px;margin:12px 0 6px}
 
   <!-- ===== Chat ===== -->
   <section class="seite" id="s-chat">
+    <div class="karte">
+      <h2>In Minecraft schreiben</h2>
+      <form id="schreibForm" class="schreiben">
+        <input type="text" id="schreibText" maxlength="100" placeholder="Nachricht oder /befehl …" autocomplete="off" enterkeyhint="send">
+        <button type="submit">Senden</button>
+      </form>
+      <div class="filter" id="schnell">
+        <button type="button" data-t="/hub">/hub</button>
+        <button type="button" data-t="/bedwars">/bedwars</button>
+        <button type="button" data-t="Thank you so much!">Thank you so much!</button>
+        <button type="button" data-t="ty!">ty!</button>
+      </div>
+      <div class="hinweis" id="schreibHinweis" style="text-align:left"></div>
+    </div>
     <div class="karte"><h2>Chat <small>Nachrichten an/von dir</small></h2>
       <div id="chatListe"></div>
-      <p class="leer" style="margin-top:10px">Hinweis: Badlion speichert den Chat nicht. Hier erscheint nur etwas, wenn der Bot den Chat lesen kann (z.B. mit Lunar oder normalem Minecraft).</p>
+      <p class="leer" style="margin-top:10px">Der Bot liest den Chat per Texterkennung vom Bildschirm – nicht jede Zeile wird perfekt erkannt.</p>
     </div>
   </section>
 
@@ -335,8 +353,10 @@ function zeichneAlles() {
   $('nameListe').innerHTML = nameZeilen.slice(-400).reverse().map(z => zeileHtml(z, einst.name, true)).join('') || '<p class="leer">Noch nichts mit deinem Namen.</p>';
 
   // --- Chat ---
-  const chatZeilen = daten.chat.flatMap(m => m.message.split('\n').filter(Boolean).map(text => ({ t: m.time, text })));
-  $('chatListe').innerHTML = chatZeilen.slice(-400).reverse().map(z => zeileHtml(z, einst.name, true)).join('') || '<p class="leer">Noch keine Chat-Nachrichten.</p>';
+  const chatZeilen = daten.chat.flatMap(m => m.message.split('\n').filter(Boolean).map(text => ({ t: m.time, text })))
+    .concat(zeilen.filter(z => z.text.startsWith('Vom Handy in den Chat:')).map(z => ({ t: z.t, text: '➜ ' + z.text.replace('Vom Handy in den Chat: ', ''), ich: true })))
+    .sort((a, b) => a.t - b.t);
+  $('chatListe').innerHTML = chatZeilen.slice(-400).reverse().map(z => z.ich ? zeileHtml(z, '', true).replace('class="zeile"', 'class="zeile ich"') : zeileHtml(z, einst.name, true)).join('') || '<p class="leer">Noch keine Chat-Nachrichten.</p>';
 
   // --- Bücher ---
   const buecher = daten.haupt.filter(m => /Buch/i.test(m.message));
@@ -406,6 +426,21 @@ document.querySelectorAll('[data-cmd]').forEach(btn => btn.onclick = async () =>
     setTimeout(aktualisieren, cmd === 'status' ? 7000 : 35000);
   } catch { $('cmdHinweis').textContent = 'Senden fehlgeschlagen – Internet?'; }
 });
+
+// ===================== In Minecraft schreiben =====================
+async function schreiben(text) {
+  text = text.trim().slice(0, 100);
+  if (!text) return;
+  if (!einst.thema) { $('schreibHinweis').textContent = 'Erst in den Optionen das Thema eintragen.'; return; }
+  try {
+    await fetch(NTFY + encodeURIComponent(einst.thema + '-cmd'), { method: 'POST', body: 'chat ' + text });
+    $('schreibHinweis').textContent = `Gesendet: „${text}“ – erscheint in ca. 3 Sekunden in Minecraft.`;
+    setTimeout(() => $('schreibHinweis').textContent = '', 7000);
+    setTimeout(aktualisieren, 35000);
+  } catch { $('schreibHinweis').textContent = 'Senden fehlgeschlagen – Internet?'; }
+}
+$('schreibForm').onsubmit = e => { e.preventDefault(); const t = $('schreibText').value; $('schreibText').value = ''; schreiben(t); };
+document.querySelectorAll('#schnell button').forEach(b => b.onclick = () => schreiben(b.dataset.t));
 
 // ===================== Navigation =====================
 let aktuelleSeite = 'home';

@@ -176,14 +176,18 @@ label.einst{display:block;color:var(--grau);font-size:13px;margin:12px 0 6px}
   <section class="seite" id="s-einst">
     <div class="karte">
       <h2>Einstellungen</h2>
-      <label class="einst">ntfy-Thema (wie $NtfyThema im Bot)</label>
+      <label class="einst">Firebase-Link (wie $FirebaseURL im Bot)</label>
+      <input type="url" id="eFb" autocapitalize="off" autocorrect="off" placeholder="https://…firebasedatabase.app">
+      <label class="einst">Firebase-Schlüssel (wie $FirebaseSchluessel im Bot)</label>
+      <input type="text" id="eKey" autocapitalize="off" autocorrect="off" placeholder="bot_…">
+      <label class="einst">ntfy-Thema (nur nötig ohne Firebase)</label>
       <input type="text" id="eThema" autocapitalize="off" autocorrect="off">
       <label class="einst">Dein Minecraft-Name</label>
       <input type="text" id="eName" autocapitalize="off" autocorrect="off">
       <button class="knopfklein" id="eSpeichern">Speichern</button>
       <button class="knopfklein" id="eTon">Ton für Buch-Alarm testen</button>
       <button class="knopfklein" id="eLoeschen" style="color:var(--rot)">Gespeicherten Verlauf löschen</button>
-      <p class="leer" style="margin-top:14px">Die App holt alle 30 Sekunden neue Daten, der Bot schickt sein Log alle 10 Minuten. ntfy speichert nur 12 Stunden – alles Ältere merkt sich die App auf diesem Handy (bis zu 7 Tage).<br><br>Benachrichtigungen bei geschlossener App kommen weiterhin über <b>Bark</b>.</p>
+      <p class="leer" style="margin-top:14px" id="einstInfo"></p><p class="leer">Mit Firebase kommt alles live (Status alle 5 Sek., Log alle 10 Sek.). Ohne Firebase: ntfy, Log nur alle 10 Minuten. Der Verlauf wird bis zu 7 Tage auf diesem Handy gespeichert.<br><br>Benachrichtigungen bei geschlossener App kommen weiterhin über <b>Bark</b>.</p>
     </div>
   </section>
 </main>
@@ -200,7 +204,7 @@ label.einst{display:block;color:var(--grau);font-size:13px;margin:12px 0 6px}
 <script>
 // ===================== Einstellungen =====================
 // Das Thema steht absichtlich NICHT hier drin (die Datei ist oeffentlich) - es wird in den Optionen eingetragen.
-const STANDARD = { thema: '', name: 'Fore11e' };
+const STANDARD = { thema: '', name: 'Fore11e', fb: '', key: '' };
 const NTFY = 'https://ntfy.sh/';
 const MAX_ALTER = 7 * 24 * 3600;          // Verlauf 7 Tage aufheben
 function lade(k, d) { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch { return d; } }
@@ -214,10 +218,92 @@ let daten = lade('mcbot-daten', { haupt: [], log: [], chat: [] });
 let gesehen = lade('mcbot-gesehen', { name: 0, chat: 0, buch: 0 });
 let ersterAbruf = true;
 
+// ===================== Firebase (live) =====================
+const fbAn = () => !!(einst.fb && einst.key);
+const fbBasis = () => einst.fb.trim().replace(/\/+$/, '') + '/' + encodeURIComponent(einst.key.trim()) + '/';
+let fbStatus = null;          // letzter Status vom Bot
+let fbQuellen = {};           // offene EventSource-Verbindungen
+let fbErster = {};            // erste Antwort je Pfad = alter Stand (kein Alarm)
+let zeichnenTimer = 0;
+function baldZeichnen() { clearTimeout(zeichnenTimer); zeichnenTimer = setTimeout(zeichneAlles, 250); }
+const FB_PFADE = { log: 'log', chat: 'chat', meldungen: 'haupt' };
+
+function fbEintraegeAufnehmen(pfad, eintraege) {
+  const k = FB_PFADE[pfad];
+  daten.maxT = daten.maxT || {};
+  let maxT = daten.maxT[k] || 0, neueBuecher = 0;
+  eintraege.sort((a, b) => a.t - b.t);
+  for (const e of eintraege) {
+    if (!e || typeof e.t !== 'number' || e.t <= maxT) continue;
+    maxT = e.t;
+    const m = { id: e.id, time: e.t / 1000, title: e.titel || '', message: String(e.text || '') };
+    const liste = daten[k], letzte = liste[liste.length - 1];
+    // Log-Stuecke zu 5-Minuten-Bloecken zusammenfassen (spart Speicher auf dem Handy)
+    if (k === 'log' && !m.title && letzte && !letzte.title && Math.floor(letzte.time / 300) === Math.floor(m.time / 300)) {
+      letzte.message += '\n' + m.message; letzte.time = m.time;
+    } else liste.push(m);
+    if (k === 'haupt' && /Buch/i.test(m.message)) neueBuecher++;
+  }
+  daten.maxT[k] = maxT;
+  const grenze = Date.now() / 1000 - MAX_ALTER;
+  daten[k] = daten[k].filter(m => m.time >= grenze).slice(-3000);
+  speichere('mcbot-daten', daten);
+  return neueBuecher;
+}
+
+function fbVerbinden() {
+  fbTrennen();
+  const basis = fbBasis();
+  // Status (live)
+  const st = new EventSource(basis + 'status.json');
+  st.addEventListener('put', ev => {
+    try { const j = JSON.parse(ev.data); if (j.path === '/') fbStatus = j.data; else if (fbStatus) fbStatus[j.path.slice(1)] = j.data; } catch {}
+    baldZeichnen();
+  });
+  st.onerror = () => { if (!fbStatus) setStatus('Keine Verbindung', 'var(--rot)'); };
+  fbQuellen.status = st;
+  // Log, Chat, Meldungen (Buecher): nur Neues seit dem letzten bekannten Eintrag
+  for (const pfad of Object.keys(FB_PFADE)) {
+    const k = FB_PFADE[pfad];
+    const ab = Math.max((daten.maxT && daten.maxT[k]) || 0, Date.now() - MAX_ALTER * 1000) + 1;
+    const q = new EventSource(`${basis}${pfad}.json?orderBy=%22t%22&startAt=${ab}`);
+    fbErster[pfad] = true;
+    const behandeln = ev => {
+      let j; try { j = JSON.parse(ev.data); } catch { return; }
+      const liste = [];
+      if (j.data && j.path === '/') { for (const [id, e] of Object.entries(j.data)) if (e) liste.push(Object.assign({ id }, e)); }
+      else if (j.data && /^\/[^/]+$/.test(j.path)) liste.push(Object.assign({ id: j.path.slice(1) }, j.data));
+      const neu = fbEintraegeAufnehmen(pfad, liste);
+      if (pfad === 'meldungen' && neu && !fbErster[pfad]) buchAlarm();
+      fbErster[pfad] = false;
+      baldZeichnen();
+    };
+    q.addEventListener('put', behandeln);
+    q.addEventListener('patch', behandeln);
+    fbQuellen[pfad] = q;
+  }
+}
+function fbTrennen() { for (const q of Object.values(fbQuellen)) try { q.close(); } catch {} fbQuellen = {}; }
+async function fbBefehl(text) {
+  const r = await fetch(fbBasis() + 'cmd.json', { method: 'POST', body: JSON.stringify({ t: { '.sv': 'timestamp' }, text }) });
+  if (!r.ok) throw new Error(r.status);
+}
+// Befehl an den Bot (Firebase oder ntfy)
+async function befehl(text) {
+  if (fbAn()) return fbBefehl(text);
+  const r = await fetch(NTFY + encodeURIComponent(einst.thema + '-cmd'), { method: 'POST', body: text });
+  if (!r.ok) throw new Error(r.status);
+}
+
 // Alle drei Themen in EINER Anfrage holen (schont das ntfy-Limit)
 let pauseBis = 0;
 async function aktualisieren() {
-  if (!einst.thema) { setStatus('Thema fehlt', 'var(--gelb)'); return; }
+  if (fbAn()) {
+    const tot = Object.values(fbQuellen).some(q => q.readyState === 2);
+    if (!fbQuellen.status || tot) fbVerbinden();
+    return;
+  }
+  if (!einst.thema) { setStatus('Einstellungen fehlen', 'var(--gelb)'); return; }
   if (Date.now() < pauseBis) return;
   const t = themen();
   const nachThema = { [t.haupt]: 'haupt', [t.log]: 'log', [t.chat]: 'chat' };
@@ -301,7 +387,16 @@ function zeichneAlles() {
   const letzte = daten.log.length ? daten.log[daten.log.length - 1].time : 0;
   const seit = jetzt - letzte;
   const letztesWort = zeilen.length ? zeilen[zeilen.length - 1].text : '';
-  if (!letzte) setStatus('Keine Daten', 'var(--grau)');
+  if (fbAn()) {
+    const s = fbStatus, alt = s ? jetzt - s.t / 1000 : 1e9;
+    if (!s) setStatus('Verbinde …', 'var(--grau)');
+    else if (s.beendet) setStatus('Bot beendet', 'var(--rot)');
+    else if (alt > 20) setStatus(alt < 3600 ? `Offline · ${Math.round(alt / 60)} Min` : 'Offline', 'var(--rot)');
+    else if (s.zustand === 'pause' && s.laeuft) setStatus('In Pause bis ' + s.pauseBis, 'var(--gelb)');
+    else if (!s.laeuft) setStatus('Pausiert', 'var(--gelb)');
+    else setStatus(s.feld > 0 ? `Online · Feld ${s.feld}` : 'Online', 'var(--gruen)');
+  }
+  else if (!letzte) setStatus('Keine Daten', 'var(--grau)');
   else if (seit < 720) {
     if (/Pause Nr\./.test(zeilen.slice(-5).map(z => z.text).join(' '))) setStatus('In Pause', 'var(--gelb)');
     else setStatus('Online', 'var(--gruen)');
@@ -321,6 +416,12 @@ function zeichneAlles() {
     $('kLauf').textContent = lz ? `${lz[1]}h ${lz[2]}m` : '–';
     $('statZeit').textContent = 'Statistik von ' + zeit(st.time, true);
     $('botZustand').textContent = st.message.split('\n')[0];
+  }
+  if (fbAn() && fbStatus && fbStatus.t) {
+    const m = fbStatus.laufzeitMin || 0;
+    $('kLauf').textContent = `${Math.floor(m / 60)}h ${m % 60}m`;
+    $('statZeit').textContent = 'Live · ' + zeit(fbStatus.t / 1000);
+    $('botZustand').textContent = `Seit ${fbStatus.seit}: ${fbStatus.nachrichten} Nachrichten, ${fbStatus.lobbys} Lobbys, ${fbStatus.pausen} Pausen`;
   }
 
   // --- Diagramm Aktivität ---
@@ -351,6 +452,7 @@ function zeichneAlles() {
     else if (z.text.startsWith('PC wird in')) ausBis = Math.max(ausBis, z.t + 60);
     else if (z.text.startsWith('Herunterfahren abgebrochen')) ausBis = 0;
   }
+  if (fbAn() && fbStatus && Date.now() / 1000 - fbStatus.t / 1000 < 60 && Date.now() > sparGesetzt + 15000) sparAn = !!fbStatus.spar;
   pcKnoepfe();
 
   // --- Kurz-Log ---
@@ -441,18 +543,18 @@ document.querySelectorAll('[data-cmd]').forEach(btn => btn.onclick = async () =>
   const cmd = btn.dataset.cmd;
   if (cmd === 'stop' && !confirm('Bot wirklich komplett beenden?')) return;
   try {
-    await fetch(NTFY + encodeURIComponent(einst.thema + '-cmd'), { method: 'POST', body: cmd });
-    $('cmdHinweis').textContent = `„${cmd}“ gesendet – der Bot reagiert in ca. 5 Sekunden.`;
+    await befehl(cmd);
+    $('cmdHinweis').textContent = fbAn() ? `„${cmd}“ gesendet.` : `„${cmd}“ gesendet – der Bot reagiert in ca. 5 Sekunden.`;
     setTimeout(() => $('cmdHinweis').textContent = '', 6000);
     setTimeout(aktualisieren, cmd === 'status' ? 8000 : 30000);
   } catch { $('cmdHinweis').textContent = 'Senden fehlgeschlagen – Internet?'; }
 });
 
 // ===================== PC: Energie sparen / ausschalten =====================
-let sparAn = false, ausBis = 0;
+let sparAn = false, ausBis = 0, sparGesetzt = 0;
 async function sendeCmd(cmd, text) {
   try {
-    await fetch(NTFY + encodeURIComponent(einst.thema + '-cmd'), { method: 'POST', body: cmd });
+    await befehl(cmd);
     $('cmdHinweis').textContent = text;
     setTimeout(() => $('cmdHinweis').textContent = '', 7000);
     setTimeout(aktualisieren, 35000);
@@ -468,7 +570,7 @@ function pcKnoepfe() {
 }
 $('btnSparen').onclick = async () => {
   const cmd = sparAn ? 'aufwachen' : 'sparen';
-  if (await sendeCmd(cmd, sparAn ? 'PC wird aufgeweckt …' : 'Energiesparen wird eingeschaltet – Bildschirme bleiben aus, bis du „Aufwecken“ drückst.')) { sparAn = !sparAn; pcKnoepfe(); }
+  if (await sendeCmd(cmd, sparAn ? 'PC wird aufgeweckt …' : 'Energiesparen wird eingeschaltet – Bildschirme bleiben aus, bis du „Aufwecken“ drückst.')) { sparAn = !sparAn; sparGesetzt = Date.now(); pcKnoepfe(); }
 };
 $('btnAus').onclick = async () => {
   if (!confirm('PC wirklich herunterfahren? (Startet in 60 Sekunden, kann abgebrochen werden)')) return;
@@ -481,10 +583,10 @@ setInterval(pcKnoepfe, 1000);
 async function schreiben(text) {
   text = text.trim().slice(0, 100);
   if (!text) return;
-  if (!einst.thema) { $('schreibHinweis').textContent = 'Erst in den Optionen das Thema eintragen.'; return; }
+  if (!einst.thema && !fbAn()) { $('schreibHinweis').textContent = 'Erst in den Optionen Firebase eintragen.'; return; }
   try {
-    await fetch(NTFY + encodeURIComponent(einst.thema + '-cmd'), { method: 'POST', body: 'chat ' + text });
-    $('schreibHinweis').textContent = `Gesendet: „${text}“ – erscheint in ca. 3 Sekunden in Minecraft.`;
+    await befehl('chat ' + text);
+    $('schreibHinweis').textContent = `Gesendet: „${text}“ – erscheint gleich in Minecraft.`;
     setTimeout(() => $('schreibHinweis').textContent = '', 7000);
     setTimeout(aktualisieren, 35000);
   } catch { $('schreibHinweis').textContent = 'Senden fehlgeschlagen – Internet?'; }
@@ -516,22 +618,28 @@ document.querySelectorAll('#logFilter button').forEach(b => b.onclick = () => {
 $('logSuche').oninput = () => zeichneAlles();
 
 // ===================== Einstellungen-Seite =====================
-$('eThema').value = einst.thema; $('eName').value = einst.name;
+$('eThema').value = einst.thema; $('eName').value = einst.name; $('eFb').value = einst.fb; $('eKey').value = einst.key;
+function einstInfo() { $('einstInfo').textContent = fbAn() ? '✅ Verbunden über Firebase (live).' : (einst.thema ? 'Verbunden über ntfy.' : 'Bitte Firebase-Link und Schlüssel eintragen.'); }
+einstInfo();
 $('eSpeichern').onclick = () => {
   const neuesThema = $('eThema').value.trim() || STANDARD.thema;
-  if (neuesThema !== einst.thema) { daten = { haupt: [], log: [], chat: [] }; speichere('mcbot-daten', daten); ersterAbruf = true; }
-  einst = { thema: neuesThema, name: $('eName').value.trim() || STANDARD.name };
-  speichere('mcbot-einst', einst); aktualisieren(); alert('Gespeichert.');
+  let fb = $('eFb').value.trim(); if (fb && !/^https?:\/\//.test(fb)) fb = 'https://' + fb;
+  fb = fb.replace(/\/+$/, '').replace(/\.json$/, '');
+  const key = $('eKey').value.trim();
+  if (neuesThema !== einst.thema || fb !== einst.fb || key !== einst.key) { daten = { haupt: [], log: [], chat: [] }; speichere('mcbot-daten', daten); ersterAbruf = true; fbStatus = null; }
+  einst = { thema: neuesThema, name: $('eName').value.trim() || STANDARD.name, fb, key };
+  speichere('mcbot-einst', einst); fbTrennen(); aktualisieren(); einstInfo(); alert('Gespeichert.');
 };
 $('eTon').onclick = () => buchAlarm();
-$('eLoeschen').onclick = () => { if (confirm('Gespeicherten Verlauf auf diesem Handy löschen?')) { daten = { haupt: [], log: [], chat: [] }; speichere('mcbot-daten', daten); ersterAbruf = true; aktualisieren(); } };
+$('eLoeschen').onclick = () => { if (confirm('Gespeicherten Verlauf auf diesem Handy löschen?')) { daten = { haupt: [], log: [], chat: [] }; speichere('mcbot-daten', daten); ersterAbruf = true; fbTrennen(); aktualisieren(); } };
 
 // ===================== Start =====================
-zeigeSeite(einst.thema ? lade('mcbot-seite', 'home') : 'einst');
+zeigeSeite(einst.thema || fbAn() ? lade('mcbot-seite', 'home') : 'einst');
 aktualisieren();
 setInterval(() => { if (!document.hidden) aktualisieren(); }, 30000);
 setInterval(zeichneAlles, 15000);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) aktualisieren(); });
+window.addEventListener('online', () => { if (fbAn()) fbVerbinden(); });
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 </script>
 </body>

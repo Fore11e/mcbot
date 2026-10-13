@@ -1,5 +1,5 @@
-# Holt alle 10 Minuten die Hypixel-Spielerzahlen von skykings.net
-# und speichert sie in Firebase (<FB_BASIS>/bedwars; FB_BASIS ist ein GitHub-Secret), damit die App sie anzeigen kann.
+# Holt alle 10 Minuten die offiziellen Spielerzahlen von der Hypixel-API
+# und speichert sie in Firebase. Benoetigte GitHub-Secrets: HYPIXEL_KEY, FB_BASIS.
 name: BedWars-Spielerzahlen
 on:
   schedule:
@@ -10,27 +10,23 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Daten holen und speichern
+      - name: Spielerzahlen holen und speichern
         env:
           FB_BASIS: ${{ secrets.FB_BASIS }}
-          QUELLE: https://skykings.net/api/player-counts
-          UA: mcbot-private-app (github.com/Fore11e/mcbot)
+          HYPIXEL_KEY: ${{ secrets.HYPIXEL_KEY }}
         run: |
           set -uo pipefail
-          if [ -z "${FB_BASIS:-}" ]; then echo 'Secret FB_BASIS fehlt'; exit 1; fi
+          if [ -z "${FB_BASIS:-}" ] || [ -z "${HYPIXEL_KEY:-}" ]; then echo 'Secret FB_BASIS oder HYPIXEL_KEY fehlt'; exit 1; fi
           FB="${FB_BASIS%/}/bedwars"
-          holen() { code=$(curl -sS -L --retry 2 -A "$UA" -H 'Accept: application/json' -o "$2" -w '%{http_code}' "$QUELLE?range=$1"); echo "Hole $1 -> HTTP $code"; [ "$code" = 200 ] || { head -c 300 "$2"; echo; return 1; }; }
-          speichern() { code=$(curl -sS -o /dev/null -w '%{http_code}' -X PUT "$FB/$1.json" -d @"$2"); echo "Speichere $1 -> HTTP $code"; [ "$code" = 200 ]; }
-          umwandeln() { jq -c '{t: (now*1000|floor), p: [.points[] | [(.time/1000|floor), (.games.BEDWARS // null), .total]] | unique_by(.[0])}' "$1" > r.json; }
-          holen 24h d.json || exit 1
-          umwandeln d.json && speichern r24h r.json || exit 1
-          jq -c '.points[-1] | {t: .time, bw: (.games.BEDWARS // null), total: .total, modi: (.games // {})}' d.json > live.json
-          speichern live live.json || exit 1
-          echo "Live: $(head -c 120 live.json)"
-          # laengere Zeitraeume nur einmal pro Stunde (oder bei manuellem Start)
-          M=$(date -u +%-M)
-          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ] || [ "$M" -lt 10 ]; then
-            for R in 7d 30d all; do
-              holen $R d.json && umwandeln d.json && speichern r$R r.json && echo "$R: $(jq '.p | length' r.json) Punkte"
-            done
-          fi
+          code=$(curl -sS -H "API-Key: $HYPIXEL_KEY" -o d.json -w '%{http_code}' https://api.hypixel.net/v2/counts)
+          echo "Hypixel -> HTTP $code"
+          if [ "$code" != 200 ]; then head -c 300 d.json; echo; echo 'Tipp: Hypixel-Key abgelaufen? Neuen Key als Secret HYPIXEL_KEY eintragen.'; exit 1; fi
+          T=$(date -u +%s)
+          jq -c --argjson t "$T" '{t: ($t*1000), bw: .games.BEDWARS.players, total: .playerCount, modi: ((.games // {}) | map_values(.players // 0)), bwModi: (.games.BEDWARS.modes // {})}' d.json > live.json
+          jq -c '[.games.BEDWARS.players, .playerCount]' d.json > p.json
+          for z in "live live.json" "verlauf/$T p.json"; do
+            set -- $z
+            c=$(curl -sS -o /dev/null -w '%{http_code}' -X PUT "$FB/$1.json" -d @"$2")
+            echo "Speichere $1 -> HTTP $c"; [ "$c" = 200 ] || exit 1
+          done
+          echo "BedWars: $(jq .bw live.json), Hypixel gesamt: $(jq .total live.json)"

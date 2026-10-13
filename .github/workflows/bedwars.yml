@@ -1,0 +1,39 @@
+# Holt alle 10 Minuten die Hypixel-Spielerzahlen von skykings.net
+# und speichert sie in Firebase (<FB_BASIS>/bedwars; FB_BASIS ist ein GitHub-Secret), damit die App sie anzeigen kann.
+name: BedWars-Spielerzahlen
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+jobs:
+  holen:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Daten holen und speichern
+        env:
+          FB_BASIS: ${{ secrets.FB_BASIS }}
+          QUELLE: https://skykings.net/api/player-counts
+          UA: mcbot-private-app (github.com/Fore11e/mcbot)
+        run: |
+          set -euo pipefail
+          if [ -z "${FB_BASIS:-}" ]; then echo 'Secret FB_BASIS fehlt'; exit 1; fi
+          FB="${FB_BASIS%/}/bedwars"
+          umwandeln() {
+            jq -c '{t: (now*1000|floor), p: [.points[] | [(.time/1000|floor), (.games.BEDWARS // null), .total]] | unique_by(.[0])}'
+          }
+          curl -sfL --retry 2 -A "$UA" "$QUELLE?range=24h" -o d.json
+          umwandeln < d.json > r.json
+          curl -sf -X PUT "$FB/r24h.json" -d @r.json > /dev/null
+          jq -c '.points[-1] | {t: .time, bw: (.games.BEDWARS // null), total: .total, modi: (.games // {})}' d.json > live.json
+          curl -sf -X PUT "$FB/live.json" -d @live.json > /dev/null
+          echo "Live: $(cat live.json | head -c 200)"
+          # laengere Zeitraeume nur einmal pro Stunde (oder bei manuellem Start)
+          M=$(date -u +%-M)
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ] || [ "$M" -lt 10 ]; then
+            for R in 7d 30d all; do
+              curl -sfL --retry 2 -A "$UA" "$QUELLE?range=$R" | umwandeln > r.json
+              curl -sf -X PUT "$FB/r$R.json" -d @r.json > /dev/null
+              echo "$R: $(jq '.p | length' r.json) Punkte"
+            done
+          fi

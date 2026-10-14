@@ -196,6 +196,11 @@ label.einst{display:block;color:var(--grau);font-size:13px;margin:12px 0 6px}
 
   <!-- ===== Bücher ===== -->
   <section class="seite" id="s-buch">
+    <div class="karte">
+      <h2>Hinweise <small id="hinweisAnzahl"></small></h2>
+      <div class="filter" id="hinweisFilter"><button data-f="" class="an">Alle</button><button data-f="mute">Mute</button><button data-f="chat">Nicht im Chat</button><button data-f="buch">Bücher</button></div>
+      <div id="hinweisListe" style="margin-top:8px"></div>
+    </div>
     <div class="karte"><h2>Bücher <small id="buchAnzahl"></small></h2><div id="buchListe"></div></div>
     <div class="karte diagramm"><h2>Bücher pro Tag</h2><div id="chartBuch"></div></div>
   </section>
@@ -249,7 +254,7 @@ label.einst{display:block;color:var(--grau);font-size:13px;margin:12px 0 6px}
   <button data-s="log"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h10"/></svg>Log</button>
   <button data-s="name"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 21c1-4 4-6 8-6s7 2 8 6"/></svg>Mein Name<span class="badge" id="bName"></span></button>
   <button data-s="chat"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 5h16v11H9l-5 4z"/></svg>Chat<span class="badge" id="bChat"></span></button>
-  <button data-s="buch"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h7a3 3 0 0 1 3 3v13a2 2 0 0 0-2-2H4zM20 4h-5"/><path d="M14 7a3 3 0 0 1 3-3h3v14h-6"/></svg>Bücher<span class="badge" id="bBuch"></span></button>
+  <button data-s="buch"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>Hinweise<span class="badge" id="bBuch"></span></button>
   <button data-s="bw"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 18V7M3 14h18v4M21 14v-2a3 3 0 0 0-3-3h-7v5"/><circle cx="7" cy="11" r="1.6"/></svg>BedWars</button>
   <button data-s="einst"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>Optionen</button>
 </nav>
@@ -279,12 +284,15 @@ let fbQuellen = {};           // offene EventSource-Verbindungen
 let fbErster = {};            // erste Antwort je Pfad = alter Stand (kein Alarm)
 let zeichnenTimer = 0;
 function baldZeichnen() { clearTimeout(zeichnenTimer); zeichnenTimer = setTimeout(zeichneAlles, 250); }
-const FB_PFADE = { log: 'log', chat: 'chat', meldungen: 'haupt' };
+const FB_PFADE = { log: 'log', chat: 'chat', meldungen: 'haupt', hinweise: 'hinweise' };
+let letzteNeue = [];
 
 function fbEintraegeAufnehmen(pfad, eintraege) {
   const k = FB_PFADE[pfad];
   daten.maxT = daten.maxT || {};
   let maxT = daten.maxT[k] || 0, neueBuecher = 0;
+  if (!daten[k]) daten[k] = [];
+  letzteNeue = [];
   eintraege.sort((a, b) => a.t - b.t);
   for (const e of eintraege) {
     if (!e || typeof e.t !== 'number' || e.t <= maxT) continue;
@@ -295,6 +303,7 @@ function fbEintraegeAufnehmen(pfad, eintraege) {
     if (k === 'log' && !m.title && letzte && !letzte.title && Math.floor(letzte.time / 300) === Math.floor(m.time / 300)) {
       letzte.message += '\n' + m.message; letzte.time = m.time;
     } else liste.push(m);
+    letzteNeue.push(m);
     if (k === 'haupt' && /Buch/i.test(m.message)) neueBuecher++;
   }
   daten.maxT[k] = maxT;
@@ -328,6 +337,7 @@ function fbVerbinden() {
       else if (j.data && /^\/[^/]+$/.test(j.path)) liste.push(Object.assign({ id: j.path.slice(1) }, j.data));
       const neu = fbEintraegeAufnehmen(pfad, liste);
       if (pfad === 'meldungen' && neu && !fbErster[pfad]) buchAlarm();
+      if (pfad === 'hinweise' && !fbErster[pfad] && letzteNeue.some(m => m.title === 'mute')) alarm('🔇 Chat-Bann (Mute) erkannt!');
       fbErster[pfad] = false;
       baldZeichnen();
     };
@@ -430,6 +440,7 @@ function zeileHtml(z, wort, mitTag) {
 }
 
 let zeitraumStunden = 12;
+let hinweisFilter = '';
 let logFilter = '';
 
 function zeichneAlles() {
@@ -542,10 +553,19 @@ function zeichneAlles() {
   const proTag = tage.map(d => buecher.filter(b => b.time >= d / 1000 && b.time < d / 1000 + 86400).length);
   $('chartBuch').innerHTML = balken(tage.map(d => d.toLocaleDateString('de-DE', { weekday: 'short' })), [proTag], ['var(--gelb)'], true);
 
+  // --- Hinweise (Mute, Nachricht nicht im Chat, Bücher) ---
+  const SYMBOL = { mute: '🔇', chat: '⚠️', buch: '📖' };
+  const alleHinweise = (daten.hinweise || []).map(m => ({ time: m.time, art: m.title || 'chat', text: m.message }))
+    .concat(buecher.map(b => ({ time: b.time, art: 'buch', text: b.message })))
+    .sort((a, b) => b.time - a.time);
+  const gezeigt = hinweisFilter ? alleHinweise.filter(h => h.art === hinweisFilter) : alleHinweise;
+  $('hinweisAnzahl').textContent = alleHinweise.length + ' in 7 Tagen';
+  $('hinweisListe').innerHTML = gezeigt.slice(0, 300).map(h => `<div class="buch"><span class="ic">${SYMBOL[h.art] || '🔔'}</span><div><b${h.art === 'mute' ? ' style="color:var(--rot)"' : ''}>${zeit(h.time, true)}</b><br><span class="leer">${esc(h.text)}</span></div></div>`).join('') || '<p class="leer">Keine Hinweise – alles in Ordnung.</p>';
+
   // --- Badges (neu seit letztem Ansehen) ---
   badge('bName', nameZeilen.filter(z => z.t > gesehen.name).length, 'name');
   badge('bChat', chatZeilen.filter(z => z.t > gesehen.chat).length, 'chat');
-  badge('bBuch', buecher.filter(b => b.time > gesehen.buch).length, 'buch');
+  badge('bBuch', alleHinweise.filter(b => b.time > gesehen.buch).length, 'buch');
 }
 
 function badge(id, anzahl, seite) {
@@ -584,8 +604,9 @@ function ton() {
     });
   } catch {}
 }
-function buchAlarm() {
-  const b = $('banner'); b.style.display = 'block'; ton();
+function buchAlarm() { alarm('📖 Buch erkannt!'); }
+function alarm(text) {
+  const b = $('banner'); b.textContent = text; b.style.display = 'block'; ton();
   if (navigator.vibrate) navigator.vibrate([300, 100, 300]);
   setTimeout(() => b.style.display = 'none', 8000);
 }
@@ -672,6 +693,11 @@ document.querySelectorAll('#logFilter button').forEach(b => b.onclick = () => {
   zeichneAlles();
 });
 $('logSuche').oninput = () => zeichneAlles();
+document.querySelectorAll('#hinweisFilter button').forEach(b => b.onclick = () => {
+  hinweisFilter = b.dataset.f;
+  document.querySelectorAll('#hinweisFilter button').forEach(x => x.classList.toggle('an', x === b));
+  zeichneAlles();
+});
 
 // ===================== Einstellungen-Seite =====================
 $('eThema').value = einst.thema; $('eName').value = einst.name; $('eFb').value = einst.fb; $('eKey').value = einst.key;

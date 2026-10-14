@@ -79,6 +79,8 @@ label.einst{display:block;color:var(--grau);font-size:13px;margin:12px 0 6px}
 .spiel .bar{height:10px;border-radius:0 4px 4px 0;background:var(--grau);opacity:.55}
 .spiel.bw .bar{background:var(--gruen);opacity:1}.spiel.bw{font-weight:700}
 .spiel span:last-child{text-align:right;color:var(--grau)}
+#shotBild{width:100%;border-radius:10px;display:none;cursor:zoom-in}
+#shotBild.gross{position:fixed;inset:0;z-index:20;width:100%;height:100%;object-fit:contain;background:#000;border-radius:0;cursor:zoom-out}
 .knopfklein{background:var(--karte2);color:var(--text);border:1px solid var(--rand);border-radius:10px;padding:10px 14px;font-size:14px;font-family:inherit;margin-top:10px}
 </style>
 </head>
@@ -110,6 +112,14 @@ label.einst{display:block;color:var(--grau);font-size:13px;margin:12px 0 6px}
         <button id="btnAus" style="background:#5a2a2a">⏻ PC ausschalten</button>
       </div>
       <button id="btnAbbrechen" class="knopfklein" style="display:none;width:100%;color:var(--gelb)">Herunterfahren abbrechen</button>
+    </div>
+
+    <div class="karte">
+      <h2>Bildschirm <small id="shotZeit"></small></h2>
+      <img id="shotBild" alt="Screenshot vom PC">
+      <p class="leer" id="shotLeer">Noch kein Screenshot. Der Bot schickt alle 15 Minuten einen.</p>
+      <div class="filter" id="shotListe"></div>
+      <button class="knopfklein" data-cmd="screenshot" style="width:100%">📷 Jetzt Screenshot machen</button>
     </div>
 
     <div class="karte">
@@ -587,6 +597,7 @@ document.querySelectorAll('[data-cmd]').forEach(btn => btn.onclick = async () =>
   if (cmd === 'stop' && !confirm('Bot wirklich komplett beenden?')) return;
   try {
     await befehl(cmd);
+    if (cmd === 'screenshot') { setTimeout(() => shotsLaden(true), 4000); setTimeout(() => shotsLaden(true), 10000); }
     $('cmdHinweis').textContent = fbAn() ? `„${cmd}“ gesendet.` : `„${cmd}“ gesendet – der Bot reagiert in ca. 5 Sekunden.`;
     setTimeout(() => $('cmdHinweis').textContent = '', 6000);
     setTimeout(aktualisieren, cmd === 'status' ? 8000 : 30000);
@@ -647,6 +658,7 @@ function zeigeSeite(s) {
   window.scrollTo(0, 0);
   zeichneAlles();
   if (s === 'bw') { bwZeichnen(); bwAktualisieren(); }
+  if (s === 'home') shotsLaden();
 }
 document.querySelectorAll('nav button').forEach(b => b.onclick = () => zeigeSeite(b.dataset.s));
 document.querySelectorAll('#zeitraum button').forEach(b => b.onclick = () => {
@@ -676,6 +688,38 @@ $('eSpeichern').onclick = () => {
 };
 $('eTon').onclick = () => buchAlarm();
 $('eLoeschen').onclick = () => { if (confirm('Gespeicherten Verlauf auf diesem Handy löschen?')) { daten = { haupt: [], log: [], chat: [] }; speichere('mcbot-daten', daten); ersterAbruf = true; fbTrennen(); aktualisieren(); } };
+
+// ===================== Screenshots =====================
+let shotKeys = [], shotAktiv = null, shotGeholt = 0;
+async function shotsLaden(erzwingen) {
+  if (!fbAn()) return;
+  if (!erzwingen && Date.now() - shotGeholt < 60000) return;
+  shotGeholt = Date.now();
+  try {
+    const j = await (await fetch(fbBasis() + 'screenshots.json?shallow=true')).json();
+    shotKeys = j ? Object.keys(j).sort() : [];
+    const neu = shotKeys[shotKeys.length - 1];
+    if (neu && (!shotAktiv || (shotAktiv.auto && shotAktiv.k !== neu))) await shotZeigen(neu, true);
+    else shotListe();
+  } catch {}
+}
+async function shotZeigen(k, auto) {
+  shotAktiv = { k, auto };
+  shotListe();
+  try {
+    const j = await (await fetch(fbBasis() + 'screenshots/' + k + '.json')).json();
+    if (!j || !j.bild) return;
+    $('shotBild').src = 'data:image/jpeg;base64,' + j.bild;
+    $('shotBild').style.display = 'block'; $('shotLeer').style.display = 'none';
+    $('shotZeit').textContent = zeit(j.t / 1000, true) + (j.grund === 'auf Wunsch' ? ' · auf Wunsch' : '');
+  } catch {}
+}
+function shotListe() {
+  $('shotListe').innerHTML = shotKeys.slice(-12).reverse().map(k => `<button data-k="${k}" class="${shotAktiv && shotAktiv.k === k ? 'an' : ''}">${new Date(+k).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })}</button>`).join('');
+  $('shotListe').querySelectorAll('button').forEach(b => b.onclick = () => shotZeigen(b.dataset.k, b.dataset.k === shotKeys[shotKeys.length - 1]));
+}
+$('shotBild').onclick = () => $('shotBild').classList.toggle('gross');
+setInterval(() => { if (!document.hidden && aktuelleSeite === 'home') shotsLaden(); }, 60000);
 
 // ===================== BedWars =====================
 const SPIELNAMEN = { BEDWARS: 'Bed Wars', SKYBLOCK: 'SkyBlock', IDLE: 'Idle', HOUSING: 'Housing', ARCADE: 'Arcade', LIMBO: 'Limbo', SMP: 'SMP', DUELS: 'Duels', BUILD_BATTLE: 'Build Battle', MURDER_MYSTERY: 'Murder Mystery', MAIN_LOBBY: 'Hauptlobby', PIT: 'The Pit', SKYWARS: 'SkyWars', TNTGAMES: 'TNT Games', PROTOTYPE: 'Prototype', WOOL_GAMES: 'Wool Games', UHC: 'UHC', MCGO: 'Cops and Crims', SURVIVAL_GAMES: 'Blitz SG', LEGACY: 'Classic', REPLAY: 'Replay', WALLS3: 'Mega Walls', SUPER_SMASH: 'Smash Heroes', BATTLEGROUND: 'Warlords' };

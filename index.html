@@ -81,6 +81,15 @@ label.einst{display:block;color:var(--grau);font-size:13px;margin:12px 0 6px}
 .spiel span:last-child{text-align:right;color:var(--grau)}
 #shotBild{width:100%;border-radius:10px;display:none;cursor:zoom-in}
 #shotBild.gross{position:fixed;inset:0;z-index:20;width:100%;height:100%;object-fit:contain;background:#000;border-radius:0;cursor:zoom-out}
+.regler{padding:9px 0;border-bottom:1px solid #20262d}
+.regler .kopf{display:flex;justify-content:space-between;gap:10px;font-size:14px}
+.regler .kopf b{white-space:nowrap;color:var(--gruen)}
+.regler .kopf b.anders{color:var(--gelb)}
+.regler small{color:var(--grau);font-size:11px}
+.regler input[type=range]{width:100%;margin:6px 0 0;accent-color:var(--gruen)}
+.regler.schalter{display:flex;justify-content:space-between;align-items:center}
+.regler.schalter input{width:22px;height:22px;accent-color:var(--gruen)}
+.gruppe{margin:16px 0 2px;font-weight:700;color:var(--grau);font-size:12px;text-transform:uppercase;letter-spacing:.5px}
 .knopfklein{background:var(--karte2);color:var(--text);border:1px solid var(--rand);border-radius:10px;padding:10px 14px;font-size:14px;font-family:inherit;margin-top:10px}
 </style>
 </head>
@@ -231,6 +240,12 @@ label.einst{display:block;color:var(--grau);font-size:13px;margin:12px 0 6px}
 
   <!-- ===== Einstellungen ===== -->
   <section class="seite" id="s-einst">
+    <div class="karte">
+      <h2>Bot-Einstellungen <small id="reglerStatus"></small></h2>
+      <p class="leer" style="font-size:13px;margin:0">Änderungen gelten nach ca. 10 Sekunden. Gelb = vom Standard abweichend.</p>
+      <div id="reglerListe"></div>
+      <button class="knopfklein" id="reglerReset" style="width:100%;color:var(--gelb)">↺ Alles auf Standard zurücksetzen</button>
+    </div>
     <div class="karte">
       <h2>Einstellungen</h2>
       <label class="einst">Firebase-Link (wie $FirebaseURL im Bot)</label>
@@ -680,6 +695,7 @@ function zeigeSeite(s) {
   zeichneAlles();
   if (s === 'bw') { bwZeichnen(); bwAktualisieren(); }
   if (s === 'home') shotsLaden();
+  if (s === 'einst') reglerLaden();
 }
 document.querySelectorAll('nav button').forEach(b => b.onclick = () => zeigeSeite(b.dataset.s));
 document.querySelectorAll('#zeitraum button').forEach(b => b.onclick = () => {
@@ -714,6 +730,87 @@ $('eSpeichern').onclick = () => {
 };
 $('eTon').onclick = () => buchAlarm();
 $('eLoeschen').onclick = () => { if (confirm('Gespeicherten Verlauf auf diesem Handy löschen?')) { daten = { haupt: [], log: [], chat: [] }; speichere('mcbot-daten', daten); ersterAbruf = true; fbTrennen(); aktualisieren(); } };
+
+// ===================== Bot-Einstellungen (Regler) =====================
+const REGLER = [
+  { g: 'Nachrichten' },
+  { k: 'ErsteNachrichtMinMs', l: 'Erste Nachricht nach Lobbywechsel – frühestens', min: 0, max: 10000, step: 250, fakt: 1000, e: 's' },
+  { k: 'ErsteNachrichtMaxMs', l: 'Erste Nachricht nach Lobbywechsel – spätestens', min: 0, max: 15000, step: 250, fakt: 1000, e: 's' },
+  { k: 'AndereLobbyNachrichten', l: 'Nachrichten pro Lobby (Felder 2–8)', min: 1, max: 10, step: 1, e: '' },
+  { k: 'AndereAbstandMin', l: 'Abstand zwischen Nachrichten (Felder 2–8) – min', min: 3, max: 120, step: 1, e: 's' },
+  { k: 'AndereAbstandMax', l: 'Abstand zwischen Nachrichten (Felder 2–8) – max', min: 3, max: 180, step: 1, e: 's' },
+  { k: 'Lobby1Nachrichten', l: 'Nachrichten in Lobby 1', min: 1, max: 10, step: 1, e: '' },
+  { k: 'Lobby1AbstandMin', l: 'Abstand in Lobby 1 – min', min: 3, max: 180, step: 1, e: 's' },
+  { k: 'Lobby1AbstandMax', l: 'Abstand in Lobby 1 – max', min: 3, max: 240, step: 1, e: 's' },
+  { g: 'W/S-Taps' },
+  { k: 'BewegungAn', l: 'W/S zwischen den Aktionen drücken', b: true },
+  { k: 'WMinMs', l: 'Taste halten – min', min: 50, max: 3000, step: 50, fakt: 1000, e: 's' },
+  { k: 'WMaxMs', l: 'Taste halten – max', min: 50, max: 5000, step: 50, fakt: 1000, e: 's' },
+  { g: 'Pausen' },
+  { k: 'ArbeitMinuten', l: 'Arbeiten bis zur nächsten Pause', min: 1, max: 180, step: 1, e: 'min' },
+  { k: 'PauseMinMinuten', l: 'Pause – min', min: 0, max: 120, step: 1, e: 'min' },
+  { k: 'PauseMaxMinuten', l: 'Pause – max', min: 0, max: 180, step: 1, e: 'min' },
+  { k: 'LangePauseMinuten', l: 'Jede 3. Pause (lang)', min: 0, max: 240, step: 1, e: 'min' },
+  { k: 'BewegenInPause', l: 'In der Pause ab und zu W/S (gegen AFK-Kick)', b: true },
+  { k: 'PauseBewegMinSek', l: 'W/S in der Pause – alle min', min: 10, max: 600, step: 5, e: 's' },
+  { k: 'PauseBewegMaxSek', l: 'W/S in der Pause – alle max', min: 10, max: 900, step: 5, e: 's' },
+  { g: 'Join (/hub, /bedwars)' },
+  { k: 'JoinErkennung', l: 'Bei „Fore11e has joined“ /hub + /bedwars', b: true },
+  { k: 'JoinPauseMinMs', l: 'Wartezeit vor jedem Befehl – min', min: 0, max: 5000, step: 50, fakt: 1000, e: 's' },
+  { k: 'JoinPauseMaxMs', l: 'Wartezeit vor jedem Befehl – max', min: 0, max: 8000, step: 50, fakt: 1000, e: 's' },
+  { g: 'Buch' },
+  { k: 'BuchJaKlicken', l: 'Grüne Schrift (YES) automatisch anklicken', b: true },
+  { k: 'BuchPausiertBot', l: 'Bot pausieren, wenn Klicken nicht klappt', b: true },
+  { k: 'BuchKlickWarteMinMs', l: 'Warten vor dem Klick – min', min: 0, max: 5000, step: 100, fakt: 1000, e: 's' },
+  { k: 'BuchKlickWarteMaxMs', l: 'Warten vor dem Klick – max', min: 0, max: 8000, step: 100, fakt: 1000, e: 's' },
+  { g: 'Sonstiges' },
+  { k: 'ScreenshotAlleMinuten', l: 'Screenshot alle (0 = aus)', min: 0, max: 240, step: 5, e: 'min' },
+  { k: 'MenueMinGleich', l: 'Menü-Erkennung: Mindest-Übereinstimmung', min: 0.5, max: 1, step: 0.01, fakt: 0.01, e: '%' },
+];
+let reglerStd = null, reglerWerte = {}, reglerOffen = {}, reglerTimer = 0;
+const reglerText = (r, v) => r.e === '%' ? Math.round(v * 100) + ' %' : (r.fakt ? (v / r.fakt).toLocaleString('de-DE', { maximumFractionDigits: 2 }) : v) + (r.e ? ' ' + r.e : '');
+async function reglerLaden() {
+  if (!fbAn()) { $('reglerListe').innerHTML = '<p class="leer">Erst Firebase eintragen.</p>'; return; }
+  try {
+    const [std, w] = await Promise.all(['einstellungen_standard', 'einstellungen'].map(p => fetch(fbBasis() + p + '.json').then(r => r.json())));
+    reglerStd = std; reglerWerte = w || {};
+  } catch { $('reglerStatus').textContent = 'keine Verbindung'; return; }
+  if (!reglerStd) { $('reglerListe').innerHTML = '<p class="leer">Der Bot muss einmal mit der neuen Version gestartet sein.</p>'; return; }
+  reglerZeichnen();
+}
+function reglerZeichnen() {
+  $('reglerListe').innerHTML = REGLER.map(r => {
+    if (r.g) return `<div class="gruppe">${r.g}</div>`;
+    const std = reglerStd[r.k], v = r.k in reglerWerte ? reglerWerte[r.k] : std, anders = String(v) !== String(std);
+    if (r.b) return `<label class="regler schalter"><span>${r.l}${anders ? ' <b style="color:var(--gelb)">•</b>' : ''}</span><input type="checkbox" data-k="${r.k}" ${v ? 'checked' : ''}></label>`;
+    return `<div class="regler"><div class="kopf"><span>${r.l}</span><b class="${anders ? 'anders' : ''}" id="rv-${r.k}">${reglerText(r, v)}</b></div>
+      <input type="range" data-k="${r.k}" min="${r.min}" max="${r.max}" step="${r.step}" value="${v}"><small>Standard: ${reglerText(r, std)}</small></div>`;
+  }).join('');
+  $('reglerListe').querySelectorAll('input').forEach(inp => {
+    const r = REGLER.find(x => x.k === inp.dataset.k);
+    inp.oninput = () => {
+      const v = r.b ? inp.checked : +inp.value;
+      reglerWerte[r.k] = v; reglerOffen[r.k] = v;
+      if (!r.b) { const el = $('rv-' + r.k); el.textContent = reglerText(r, v); el.classList.toggle('anders', String(v) !== String(reglerStd[r.k])); }
+      clearTimeout(reglerTimer); reglerTimer = setTimeout(reglerSenden, 600);
+      $('reglerStatus').textContent = 'wird gespeichert …';
+    };
+    if (r.b) inp.onchange = () => { inp.oninput(); reglerZeichnen(); };
+  });
+}
+async function reglerSenden() {
+  const daten = reglerOffen; reglerOffen = {};
+  try {
+    const r = await fetch(fbBasis() + 'einstellungen.json', { method: 'PATCH', body: JSON.stringify(daten) });
+    if (!r.ok) throw 0;
+    $('reglerStatus').textContent = 'gespeichert ✓';
+  } catch { $('reglerStatus').textContent = 'Speichern fehlgeschlagen'; Object.assign(reglerOffen, daten); }
+}
+$('reglerReset').onclick = async () => {
+  if (!confirm('Alle Regler auf Standard zurücksetzen?')) return;
+  try { await fetch(fbBasis() + 'einstellungen.json', { method: 'DELETE' }); reglerWerte = {}; reglerZeichnen(); $('reglerStatus').textContent = 'Standard wiederhergestellt ✓'; }
+  catch { $('reglerStatus').textContent = 'Zurücksetzen fehlgeschlagen'; }
+};
 
 // ===================== Screenshots =====================
 let shotKeys = [], shotAktiv = null, shotGeholt = 0;

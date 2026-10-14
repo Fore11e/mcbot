@@ -766,6 +766,7 @@ const REGLER = [
   { g: 'Sonstiges' },
   { k: 'ScreenshotAlleMinuten', l: 'Screenshot alle (0 = aus)', min: 0, max: 240, step: 5, e: 'min' },
   { k: 'MenueMinGleich', l: 'Menü-Erkennung: Mindest-Übereinstimmung', min: 0.5, max: 1, step: 0.01, fakt: 0.01, e: '%' },
+  { k: 'MenueMaxOffenSek', l: 'Menü automatisch schließen nach', min: 5, max: 120, step: 1, e: 's' },
 ];
 let reglerStd = null, reglerWerte = {}, reglerOffen = {}, reglerTimer = 0;
 const reglerText = (r, v) => r.e === '%' ? Math.round(v * 100) + ' %' : (r.fakt ? (v / r.fakt).toLocaleString('de-DE', { maximumFractionDigits: 2 }) : v) + (r.e ? ' ' + r.e : '');
